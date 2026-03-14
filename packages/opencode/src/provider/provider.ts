@@ -58,12 +58,45 @@ export namespace Provider {
     return Number(match[1]) >= 5 && !modelID.startsWith("gpt-5-mini")
   }
 
-  function wrapSSE(res: Response, ms: number, ctl: AbortController) {
+  /** Per-request timing collected at the HTTP/SSE layer. */
+  export type RequestTiming = {
+    /** Timestamp (ms) when fetch was called */
+    start: number
+    /** Timestamp (ms) when the HTTP response (headers) arrived */
+    response: number
+    /** Timestamp (ms) when the first SSE chunk was read */
+    first?: number
+    /** Timestamp (ms) when the last SSE chunk was read (stream done) */
+    last?: number
+    /** Total number of SSE chunks received */
+    chunks: number
+  }
+
+  /**
+   * Active per-request timing map keyed by a monotonic request id.
+   * The fetch wrapper creates an entry; wrapSSE updates it; the processor reads it.
+   */
+  const timings = new Map<string, RequestTiming>()
+  let seq = 0
+
+  /** Get and remove the timing entry for a request id */
+  export function takeTiming(id: string): RequestTiming | undefined {
+    const t = timings.get(id)
+    timings.delete(id)
+    return t
+  }
+
+  export function dropTiming(id: string) {
+    timings.delete(id)
+  }
+
+  function wrapSSE(res: Response, ms: number, ctl: AbortController, tid: string) {
     if (typeof ms !== "number" || ms <= 0) return res
     if (!res.body) return res
     if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
 
     const reader = res.body.getReader()
+    const timing = timings.get(tid)
     const body = new ReadableStream<Uint8Array>({
       async pull(ctrl) {
         const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
@@ -87,13 +120,20 @@ export namespace Provider {
         })
 
         if (part.done) {
+          if (timing) timing.last = performance.now()
           ctrl.close()
           return
+        }
+
+        if (timing) {
+          timing.chunks++
+          if (!timing.first) timing.first = performance.now()
         }
 
         ctrl.enqueue(part.value)
       },
       async cancel(reason) {
+        if (timing) timing.last = performance.now()
         ctl.abort(reason)
         await reader.cancel(reason)
       },
@@ -1221,14 +1261,36 @@ export namespace Provider {
           }
         }
 
+        // Per-request timing: record fetch start
+        const rid =
+          new Headers(opts.headers).get("x-opencode-stream") ??
+          [
+            "stream",
+            process.pid,
+            Date.now().toString(36),
+            (++seq).toString(36),
+          ].join(":")
+        const timing: RequestTiming = {
+          start: performance.now(),
+          response: 0,
+          chunks: 0,
+        }
+        timings.set(rid, timing)
+
         const res = await fetchFn(input, {
           ...opts,
           // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682
           timeout: false,
+        }).catch((err: unknown) => {
+          timings.delete(rid)
+          throw err
         })
 
+        // Record when HTTP response headers arrived
+        timing.response = performance.now()
+
         if (!chunkAbortCtl) return res
-        return wrapSSE(res, chunkTimeout, chunkAbortCtl)
+        return wrapSSE(res, chunkTimeout, chunkAbortCtl, rid)
       }
 
       const bundledFn = BUNDLED_PROVIDERS[model.api.npm]

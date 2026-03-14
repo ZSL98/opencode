@@ -26,6 +26,7 @@ import { Auth } from "@/auth"
 export namespace LLM {
   const log = Log.create({ service: "llm" })
   export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
+  let seq = 0
 
   export type StreamInput = {
     user: MessageV2.User
@@ -41,7 +42,12 @@ export namespace LLM {
     toolChoice?: "auto" | "required" | "none"
   }
 
-  export type StreamOutput = StreamTextResult<ToolSet, unknown>
+  export type StreamOutput = StreamTextResult<ToolSet, unknown> & {
+    request: {
+      id: string
+      start: number
+    }
+  }
 
   export async function stream(input: StreamInput) {
     const l = log
@@ -169,7 +175,17 @@ export namespace LLM {
       })
     }
 
-    return streamText({
+    const request = {
+      id: [
+        "stream",
+        process.pid,
+        Date.now().toString(36),
+        (++seq).toString(36),
+      ].join(":"),
+      start: Date.now(),
+    }
+
+    const result = streamText({
       onError(error) {
         l.error("stream error", {
           error,
@@ -211,6 +227,7 @@ export namespace LLM {
               "x-opencode-project": Instance.project.id,
               "x-opencode-session": input.sessionID,
               "x-opencode-request": input.user.id,
+              "x-opencode-stream": request.id,
               "x-opencode-client": Flag.OPENCODE_CLIENT,
             }
           : input.model.providerID !== "anthropic"
@@ -253,6 +270,7 @@ export namespace LLM {
         },
       },
     })
+    return Object.assign(result, { request })
   }
 
   async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user">) {

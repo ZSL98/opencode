@@ -259,6 +259,32 @@ export namespace MessageV2 {
         write: z.number(),
       }),
     }),
+    timing: z
+      .object({
+        any: z
+          .object({
+            ttft: z.number().optional(),
+            decode: z.number().optional(),
+            chunks: z.number().optional(),
+          })
+          .optional(),
+        text: z
+          .object({
+            ttft: z.number().optional(),
+            decode: z.number().optional(),
+            chunks: z.number().optional(),
+          })
+          .optional(),
+        http: z
+          .object({
+            wait: z.number().optional(),
+            ttfb: z.number().optional(),
+            stream: z.number().optional(),
+            chunks: z.number().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
   }).meta({
     ref: "StepFinishPart",
   })

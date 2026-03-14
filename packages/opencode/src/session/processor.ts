@@ -9,6 +9,7 @@ import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { Plugin } from "@/plugin"
 import type { Provider } from "@/provider/provider"
+import { Provider as ProviderNs } from "@/provider/provider"
 import { LLM } from "./llm"
 import { Config } from "@/config/config"
 import { SessionCompaction } from "./compaction"
@@ -48,10 +49,19 @@ export namespace SessionProcessor {
         needsCompaction = false
         const shouldBreak = (await Config.get()).experimental?.continue_loop_on_deny !== true
         while (true) {
+          let requestID: string | undefined
+          let usedTiming = false
           try {
             let currentText: MessageV2.TextPart | undefined
             let reasoningMap: Record<string, MessageV2.ReasoningPart> = {}
             const stream = await LLM.stream(streamInput)
+            requestID = stream.request.id
+            let firstAny: number | undefined
+            let lastAny: number | undefined
+            let chunksAny = 0
+            let firstText: number | undefined
+            let lastText: number | undefined
+            let chunksText = 0
 
             for await (const value of stream.fullStream) {
               input.abort.throwIfAborted()
@@ -81,6 +91,10 @@ export namespace SessionProcessor {
 
                 case "reasoning-delta":
                   if (value.id in reasoningMap) {
+                    const now = Date.now()
+                    if (!firstAny) firstAny = now
+                    lastAny = now
+                    chunksAny++
                     const part = reasoningMap[value.id]
                     part.text += value.text
                     if (value.providerMetadata) part.metadata = value.providerMetadata
@@ -251,6 +265,34 @@ export namespace SessionProcessor {
                   input.assistantMessage.finish = value.finishReason
                   input.assistantMessage.cost += usage.cost
                   input.assistantMessage.tokens = usage.tokens
+
+                  // Collect per-request timing from the HTTP/SSE layer
+                  const httpTiming = ProviderNs.takeTiming(stream.request.id)
+                  usedTiming = true
+                  const streamTiming = {
+                    any: {
+                      ttft: firstAny ? firstAny - stream.request.start : undefined,
+                      decode: firstAny && lastAny ? lastAny - firstAny : undefined,
+                      chunks: chunksAny,
+                    },
+                    text: {
+                      ttft: firstText ? firstText - stream.request.start : undefined,
+                      decode: firstText && lastText ? lastText - firstText : undefined,
+                      chunks: chunksText,
+                    },
+                    // HTTP-level: from fetch() call to response headers to first SSE chunk
+                    http: httpTiming
+                      ? {
+                          wait: Math.round(httpTiming.response - httpTiming.start),
+                          ttfb: httpTiming.first ? Math.round(httpTiming.first - httpTiming.start) : undefined,
+                          stream: httpTiming.last
+                            ? Math.round(httpTiming.last - (httpTiming.first ?? httpTiming.response))
+                            : undefined,
+                          chunks: httpTiming.chunks,
+                        }
+                      : undefined,
+                  }
+
                   await Session.updatePart({
                     id: PartID.ascending(),
                     reason: value.finishReason,
@@ -260,6 +302,7 @@ export namespace SessionProcessor {
                     type: "step-finish",
                     tokens: usage.tokens,
                     cost: usage.cost,
+                    timing: streamTiming,
                   })
                   await Session.updateMessage(input.assistantMessage)
                   if (snapshot) {
@@ -305,6 +348,13 @@ export namespace SessionProcessor {
 
                 case "text-delta":
                   if (currentText) {
+                    const now = Date.now()
+                    if (!firstAny) firstAny = now
+                    lastAny = now
+                    chunksAny++
+                    if (!firstText) firstText = now
+                    lastText = now
+                    chunksText++
                     currentText.text += value.text
                     if (value.providerMetadata) currentText.metadata = value.providerMetadata
                     await Session.updatePartDelta({
@@ -351,7 +401,9 @@ export namespace SessionProcessor {
               }
               if (needsCompaction) break
             }
+            if (!usedTiming && requestID) ProviderNs.dropTiming(requestID)
           } catch (e: any) {
+            if (!usedTiming && requestID) ProviderNs.dropTiming(requestID)
             log.error("process", {
               error: e,
               stack: JSON.stringify(e.stack),
