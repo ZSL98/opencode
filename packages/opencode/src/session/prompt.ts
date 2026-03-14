@@ -632,21 +632,27 @@ export namespace SessionPrompt {
 
       // Ephemerally wrap queued user messages with a reminder to stay on track
       if (step > 1 && lastFinished) {
-        for (const msg of msgs) {
-          if (msg.info.role !== "user" || msg.info.id <= lastFinished.id) continue
-          for (const part of msg.parts) {
-            if (part.type !== "text" || part.ignored || part.synthetic) continue
-            if (!part.text.trim()) continue
-            part.text = [
-              "<system-reminder>",
-              "The user sent the following message:",
-              part.text,
-              "",
-              "Please address this message and continue with your tasks.",
-              "</system-reminder>",
-            ].join("\n")
+        msgs = msgs.map((msg) => {
+          if (msg.info.role !== "user" || msg.info.id <= lastFinished.id) return msg
+          return {
+            ...msg,
+            parts: msg.parts.map((part) => {
+              if (part.type !== "text" || part.ignored || part.synthetic) return part
+              if (!part.text.trim()) return part
+              return {
+                ...part,
+                text: [
+                  "<system-reminder>",
+                  "The user sent the following message:",
+                  part.text,
+                  "",
+                  "Please address this message and continue with your tasks.",
+                  "</system-reminder>",
+                ].join("\n"),
+              }
+            }),
           }
-        }
+        })
       }
 
       await Plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
@@ -1331,11 +1337,20 @@ export namespace SessionPrompt {
   async function insertReminders(input: { messages: MessageV2.WithParts[]; agent: Agent.Info; session: Session.Info }) {
     const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
     if (!userMessage) return input.messages
+    const append = (part: MessageV2.Part) =>
+      input.messages.map((msg) =>
+        msg.info.id === userMessage.info.id
+          ? {
+              ...msg,
+              parts: [...msg.parts, part],
+            }
+          : msg,
+      )
 
     // Original logic when experimental plan mode is disabled
     if (!Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE) {
       if (input.agent.name === "plan") {
-        userMessage.parts.push({
+        return append({
           id: PartID.ascending(),
           messageID: userMessage.info.id,
           sessionID: userMessage.info.sessionID,
@@ -1346,7 +1361,7 @@ export namespace SessionPrompt {
       }
       const wasPlan = input.messages.some((msg) => msg.info.role === "assistant" && msg.info.agent === "plan")
       if (wasPlan && input.agent.name === "build") {
-        userMessage.parts.push({
+        return append({
           id: PartID.ascending(),
           messageID: userMessage.info.id,
           sessionID: userMessage.info.sessionID,
@@ -1375,7 +1390,7 @@ export namespace SessionPrompt {
             BUILD_SWITCH + "\n\n" + `A plan file exists at ${plan}. You should execute on the plan defined within it`,
           synthetic: true,
         })
-        userMessage.parts.push(part)
+        return append(part)
       }
       return input.messages
     }
@@ -1462,8 +1477,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 </system-reminder>`,
         synthetic: true,
       })
-      userMessage.parts.push(part)
-      return input.messages
+      return append(part)
     }
     return input.messages
   }
@@ -1954,13 +1968,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           : MessageV2.toModelMessages(contextMessages, model)),
       ],
     })
-    const text = await result.text.catch((err) => log.error("failed to generate title", { error: err }))
+    const text = await result.text.catch((err: unknown) => log.error("failed to generate title", { error: err }))
     if (text) {
       const cleaned = text
         .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
         .split("\n")
-        .map((line) => line.trim())
-        .find((line) => line.length > 0)
+        .map((line: string) => line.trim())
+        .find((line: string) => line.length > 0)
       if (!cleaned) return
 
       const title = cleaned.length > 100 ? cleaned.substring(0, 97) + "..." : cleaned

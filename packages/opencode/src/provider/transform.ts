@@ -74,15 +74,18 @@ export namespace ProviderTransform {
     if (model.api.id.includes("claude")) {
       return msgs.map((msg) => {
         if ((msg.role === "assistant" || msg.role === "tool") && Array.isArray(msg.content)) {
-          msg.content = msg.content.map((part) => {
-            if ((part.type === "tool-call" || part.type === "tool-result") && "toolCallId" in part) {
-              return {
-                ...part,
-                toolCallId: part.toolCallId.replace(/[^a-zA-Z0-9_-]/g, "_"),
+          return {
+            ...msg,
+            content: msg.content.map((part) => {
+              if ((part.type === "tool-call" || part.type === "tool-result") && "toolCallId" in part) {
+                return {
+                  ...part,
+                  toolCallId: part.toolCallId.replace(/[^a-zA-Z0-9_-]/g, "_"),
+                }
               }
-            }
-            return part
-          })
+              return part
+            }),
+          } as typeof msg
         }
         return msg
       })
@@ -96,29 +99,32 @@ export namespace ProviderTransform {
       for (let i = 0; i < msgs.length; i++) {
         const msg = msgs[i]
         const nextMsg = msgs[i + 1]
+        const next =
+          (msg.role === "assistant" || msg.role === "tool") && Array.isArray(msg.content)
+            ? {
+                ...msg,
+                content: msg.content.map((part) => {
+                  if ((part.type === "tool-call" || part.type === "tool-result") && "toolCallId" in part) {
+                    // Mistral requires alphanumeric tool call IDs with exactly 9 characters
+                    const id = part.toolCallId
+                      .replace(/[^a-zA-Z0-9]/g, "")
+                      .substring(0, 9)
+                      .padEnd(9, "0")
 
-        if ((msg.role === "assistant" || msg.role === "tool") && Array.isArray(msg.content)) {
-          msg.content = msg.content.map((part) => {
-            if ((part.type === "tool-call" || part.type === "tool-result") && "toolCallId" in part) {
-              // Mistral requires alphanumeric tool call IDs with exactly 9 characters
-              const normalizedId = part.toolCallId
-                .replace(/[^a-zA-Z0-9]/g, "") // Remove non-alphanumeric characters
-                .substring(0, 9) // Take first 9 characters
-                .padEnd(9, "0") // Pad with zeros if less than 9 characters
+                    return {
+                      ...part,
+                      toolCallId: id,
+                    }
+                  }
+                  return part
+                }),
+              } as typeof msg
+            : msg
 
-              return {
-                ...part,
-                toolCallId: normalizedId,
-              }
-            }
-            return part
-          })
-        }
-
-        result.push(msg)
+        result.push(next)
 
         // Fix message sequence: tool messages cannot be followed by user messages
-        if (msg.role === "tool" && nextMsg?.role === "user") {
+        if (next.role === "tool" && nextMsg?.role === "user") {
           result.push({
             role: "assistant",
             content: [
@@ -193,22 +199,36 @@ export namespace ProviderTransform {
       },
     }
 
-    for (const msg of unique([...system, ...final])) {
-      const useMessageLevelOptions = model.providerID === "anthropic" || model.providerID.includes("bedrock")
-      const shouldUseContentOptions = !useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0
+    const set = new Set(unique([...system, ...final]))
 
-      if (shouldUseContentOptions) {
-        const lastContent = msg.content[msg.content.length - 1]
-        if (lastContent && typeof lastContent === "object") {
-          lastContent.providerOptions = mergeDeep(lastContent.providerOptions ?? {}, providerOptions)
-          continue
+    return msgs.map((msg) => {
+      if (!set.has(msg)) return msg
+
+      const useMessageLevelOptions = model.providerID === "anthropic" || model.providerID.includes("bedrock")
+      if (!useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0) {
+        const content = msg.content
+        const idx = content.length - 1
+        const part = content[idx]
+        if (part && typeof part === "object") {
+          return {
+            ...msg,
+            content: content.map((item, i) =>
+              i === idx
+                ? {
+                    ...item,
+                    providerOptions: mergeDeep(item.providerOptions ?? {}, providerOptions),
+                  }
+                : item,
+            ),
+          } as typeof msg
         }
       }
 
-      msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
-    }
-
-    return msgs
+      return {
+        ...msg,
+        providerOptions: mergeDeep(msg.providerOptions ?? {}, providerOptions),
+      }
+    })
   }
 
   function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {

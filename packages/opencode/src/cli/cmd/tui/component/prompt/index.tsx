@@ -449,18 +449,48 @@ export function Prompt(props: PromptProps) {
           if (partIndex !== undefined) {
             const part = draft.prompt.parts[partIndex]
             if (part) {
-              if (part.type === "agent" && part.source) {
-                part.source.start = extmark.start
-                part.source.end = extmark.end
-              } else if (part.type === "file" && part.source?.text) {
-                part.source.text.start = extmark.start
-                part.source.text.end = extmark.end
-              } else if (part.type === "text" && part.source?.text) {
-                part.source.text.start = extmark.start
-                part.source.text.end = extmark.end
-              }
+              const next = (() => {
+                if (part.type === "agent" && part.source) {
+                  return {
+                    ...part,
+                    source: {
+                      ...part.source,
+                      start: extmark.start,
+                      end: extmark.end,
+                    },
+                  }
+                }
+                if (part.type === "file" && part.source?.text) {
+                  return {
+                    ...part,
+                    source: {
+                      ...part.source,
+                      text: {
+                        ...part.source.text,
+                        start: extmark.start,
+                        end: extmark.end,
+                      },
+                    },
+                  }
+                }
+                if (part.type === "text" && part.source?.text) {
+                  return {
+                    ...part,
+                    source: {
+                      ...part.source,
+                      text: {
+                        ...part.source.text,
+                        start: extmark.start,
+                        end: extmark.end,
+                      },
+                    },
+                  }
+                }
+                return part
+              })()
+
               newMap.set(extmark.id, newParts.length)
-              newParts.push(part)
+              newParts.push(next)
             }
           }
         }

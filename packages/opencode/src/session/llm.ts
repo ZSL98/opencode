@@ -254,8 +254,11 @@ export namespace LLM {
           {
             async transformParams(args) {
               if (args.type === "stream") {
-                // @ts-expect-error
-                args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                const prompt = ProviderTransform.message(args.params.prompt as any, input.model, options)
+                return {
+                  ...args.params,
+                  prompt,
+                } as typeof args.params
               }
               return args.params
             },
@@ -270,17 +273,19 @@ export namespace LLM {
         },
       },
     })
-    return Object.assign(result, { request })
+    return Object.create(result, {
+      request: {
+        value: request,
+        enumerable: true,
+      },
+    })
   }
 
   async function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "user">) {
     const disabled = PermissionNext.disabled(Object.keys(input.tools), input.agent.permission)
-    for (const tool of Object.keys(input.tools)) {
-      if (input.user.tools?.[tool] === false || disabled.has(tool)) {
-        delete input.tools[tool]
-      }
-    }
-    return input.tools
+    return Object.fromEntries(
+      Object.entries(input.tools).filter(([tool]) => input.user.tools?.[tool] !== false && !disabled.has(tool)),
+    )
   }
 
   // Check if messages contain any tool-call content

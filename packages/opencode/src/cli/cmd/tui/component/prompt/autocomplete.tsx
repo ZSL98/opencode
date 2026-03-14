@@ -178,43 +178,64 @@ export function Autocomplete(props: {
       typeId: props.promptPartTypeId(),
     })
 
+    const next = (() => {
+      if (part.type === "file" && part.source?.text) {
+        return {
+          ...part,
+          source: {
+            ...part.source,
+            text: {
+              ...part.source.text,
+              start: extmarkStart,
+              end: extmarkEnd,
+              value: virtualText,
+            },
+          },
+        }
+      }
+
+      if (part.type === "agent" && part.source) {
+        return {
+          ...part,
+          source: {
+            ...part.source,
+            start: extmarkStart,
+            end: extmarkEnd,
+            value: virtualText,
+          },
+        }
+      }
+
+      return part
+    })()
+
     props.setPrompt((draft) => {
       if (part.type === "file") {
         const existingIndex = draft.parts.findIndex((p) => p.type === "file" && "url" in p && p.url === part.url)
         if (existingIndex !== -1) {
           const existing = draft.parts[existingIndex]
           if (
-            part.source?.text &&
+            next.type === "file" &&
+            next.source?.text &&
             existing &&
             "source" in existing &&
             existing.source &&
             "text" in existing.source &&
             existing.source.text
           ) {
-            existing.source.text.start = extmarkStart
-            existing.source.text.end = extmarkEnd
-            existing.source.text.value = virtualText
+            draft.parts[existingIndex] = next
           }
           return
         }
       }
 
-      if (part.type === "file" && part.source?.text) {
-        part.source.text.start = extmarkStart
-        part.source.text.end = extmarkEnd
-        part.source.text.value = virtualText
-      } else if (part.type === "agent" && part.source) {
-        part.source.start = extmarkStart
-        part.source.end = extmarkEnd
-        part.source.value = virtualText
-      }
       const partIndex = draft.parts.length
-      draft.parts.push(part)
+      draft.parts.push(next)
       props.setExtmark(partIndex, extmarkId)
     })
 
-    if (part.type === "file" && part.source && part.source.type === "file") {
-      frecency.updateFrecency(part.source.path)
+    if (next.type === "file" && next.source && next.source.type === "file") {
+      frecency.updateFrecency(next.source.path)
     }
   }
 

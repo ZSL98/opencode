@@ -102,18 +102,18 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV2 {
     const warnings: LanguageModelV2CallWarning[] = []
 
     // Parse provider options
-    const compatibleOptions = Object.assign(
-      (await parseProviderOptions({
+    const compatibleOptions = {
+      ...((await parseProviderOptions({
         provider: "copilot",
         providerOptions,
         schema: openaiCompatibleProviderOptions,
-      })) ?? {},
-      (await parseProviderOptions({
+      })) ?? {}),
+      ...((await parseProviderOptions({
         provider: this.providerOptionsName,
         providerOptions,
         schema: openaiCompatibleProviderOptions,
-      })) ?? {},
-    )
+      })) ?? {}),
+    }
 
     if (topK != null) {
       warnings.push({ type: "unsupported-setting", setting: "topK" })
