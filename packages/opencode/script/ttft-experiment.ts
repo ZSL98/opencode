@@ -9,6 +9,8 @@ function args() {
     model: undefined as string | undefined,
     targets: [] as number[],
     json: false,
+    mode: "default" as "default" | "profiling",
+    repeat: 5,
   }
 
   for (let i = 0; i < vals.length; i++) {
@@ -17,8 +19,18 @@ function args() {
       out.json = true
       continue
     }
+    if (val === "--mode") {
+      const next = vals[++i]
+      if (next === "default" || next === "profiling") out.mode = next
+      continue
+    }
     if (val === "--model") {
       out.model = vals[++i]
+      continue
+    }
+    if (val === "--repeat") {
+      const next = Number(vals[++i])
+      if (Number.isInteger(next) && next > 0) out.repeat = next
       continue
     }
     out.targets.push(Number(val))
@@ -31,8 +43,17 @@ function args() {
   return out
 }
 
-function make(lines: number) {
-  return "Reply with exactly OK. Do not use tools.\n\nContext follows:\n" + base.repeat(lines)
+function make(lines: number, tag?: string) {
+  const head = [
+    "Reply with exactly OK. Do not use tools.",
+    tag ? `Request tag: ${tag}` : "",
+    "",
+    "Context follows:",
+    "",
+  ]
+    .filter(Boolean)
+    .join("\n")
+  return head + "\n" + base.repeat(lines)
 }
 
 function pct(read: number, total: number) {
@@ -101,6 +122,7 @@ function print(rows: Record<string, unknown>[]) {
   const cols = [
     "target_input_tokens",
     "mode",
+    "run",
     "ok",
     "input_tokens",
     "cache_hit_pct",
@@ -121,21 +143,36 @@ const rows: Record<string, unknown>[] = []
 
 for (const target of input.targets) {
   const lines = Math.ceil(target / 17)
-  const msg = make(lines)
-  const cold = run(msg, input.model)
+  if (input.mode === "profiling") {
+    for (let i = 0; i < input.repeat; i++) {
+      const cold = run(make(lines, `profiling-${target}-${i}-${Date.now()}`), input.model)
+      rows.push({
+        target_input_tokens: target,
+        repeated_lines: lines,
+        mode: "profiling",
+        run: i + 1,
+        ...cold,
+      })
+    }
+    continue
+  }
+
+  const cold = run(make(lines), input.model)
   rows.push({
     target_input_tokens: target,
     repeated_lines: lines,
     mode: "cold",
+    run: 1,
     ...cold,
   })
   if (!cold.ok || !("sessionID" in cold)) continue
 
-  const warm = run(msg, input.model, cold.sessionID)
+  const warm = run(make(lines), input.model, cold.sessionID)
   rows.push({
     target_input_tokens: target,
     repeated_lines: lines,
     mode: "warm",
+    run: 1,
     ...warm,
   })
 }
