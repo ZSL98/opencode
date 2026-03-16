@@ -24,7 +24,7 @@ const cols = [
   "avg_cache_hit_pct",
 ] as const
 
-function run(model: string) {
+function run(model: string, target: number) {
   const proc = spawnSync(
     "bun",
     [
@@ -37,7 +37,7 @@ function run(model: string) {
       "--repeat",
       String(repeat),
       "--json",
-      ...targets.map(String),
+      String(target),
     ],
     {
       cwd: pkg,
@@ -105,15 +105,15 @@ const rows = loadRows()
 const done = new Set(rows.map((row) => `${row.model}:${row.target_input_tokens}`))
 
 for (const model of models) {
-  const data = run(model)
-  raw[model] = data
-
   for (const target of targets) {
     const key = `${model}:${target}`
     if (done.has(key)) {
       console.log(`[skip] model=${model} target=${target}`)
       continue
     }
+    console.log(`[start] model=${model} target=${target} repeat=${repeat}`)
+    const data = run(model, target)
+    raw[key] = data
     const items = data.filter((item) => item.target_input_tokens === target)
     const ok = items.filter((item) => item.ok)
     const row = {
@@ -133,7 +133,7 @@ for (const model of models) {
     done.add(key)
     save(rows, raw)
     console.log(
-      `[${rows.length}/${total}] model=${model} target=${target} success=${row.success_count}/${repeat} avg_ttft_ms=${row.avg_ttft_ms || "n/a"} avg_decode_ms=${row.avg_decode_ms || "n/a"}`,
+      `[done ${rows.length}/${total}] model=${model} target=${target} success=${row.success_count}/${repeat} failure=${row.failure_count}/${repeat} avg_input_tokens=${row.avg_input_tokens || "n/a"} avg_ttft_ms=${row.avg_ttft_ms || "n/a"} avg_decode_ms=${row.avg_decode_ms || "n/a"} avg_cache_hit_pct=${row.avg_cache_hit_pct || "n/a"}`,
     )
   }
 }
